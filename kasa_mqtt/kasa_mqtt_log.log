@@ -1,0 +1,10 @@
+2022-04-28 00:48:53,185       config:87 INFO     loading yaml config file /home/pi/kasa-mqtt/config/config.yaml
+2022-04-28 00:48:53,202         main:229 INFO     kasa_mqtt process started
+2022-04-28 00:48:53,271         main:111 INFO     Adding KasaDevice(topic='/shed_plug/switch', name='shed_plug', host='192.168.0.190', _device=<DeviceType.Plug model HS103(US) at 192.168.0.190 (shed plug), is_on: False - dev specific: {'LED state': True, 'On since': None}>) to device list
+2022-04-28 00:48:53,274         main:113 INFO     Subscribing to topic /shed_plug/switch
+2022-04-28 00:48:53,345         main:111 INFO     Adding KasaDevice(topic='/cabinets_left/switch', name='cabinets_left', host='192.168.0.160', _device=<DeviceType.LightStrip model KL430(US) at 192.168.0.160 (Cabinet Light (Left)), is_on: True - dev specific: {'Brightness': 100, 'Is dimmable': True, 'Color temperature': 0, 'Valid temperature range': ColorTempRange(min=2500, max=9000), 'HSV': HSV(hue=183, saturation=15, value=100), 'Length': 16, 'Effect': 'Rainbow'}>) to device list
+2022-04-28 00:48:53,348         main:113 INFO     Subscribing to topic /cabinets_left/switch
+2022-04-28 00:48:53,414         main:111 INFO     Adding KasaDevice(topic='/cabinets_right/switch', name='cabinets_right', host='192.168.0.192', _device=<DeviceType.LightStrip model KL430(US) at 192.168.0.192 (Cabinet Light (Right)), is_on: True - dev specific: {'Brightness': 100, 'Is dimmable': True, 'Color temperature': 0, 'Valid temperature range': ColorTempRange(min=2500, max=9000), 'HSV': HSV(hue=183, saturation=15, value=100), 'Length': 16, 'Effect': 'Rainbow'}>) to device list
+2022-04-28 00:48:53,417         main:113 INFO     Subscribing to topic /cabinets_right/switch
+2022-04-28 00:48:56,580         main:111 INFO     Adding KasaDevice(topic='/porch_light/switch', name='porch_light', host='192.168.0.137', _device=None) to device list
+2022-04-28 00:48:56,589         main:113 INFO     Subscribing to topic /porch_light/switch
