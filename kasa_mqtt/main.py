@@ -73,6 +73,19 @@ class KasaDevice:
         except ValueError as e:
             logger.error(f"{self.host} unable to set_hsv: {e}")
 
+    async def SetBrightness(self, wanted_brightness: int):
+        if wanted_brightness < 0 or wanted_brightness > 100:
+            return
+        try:
+            device = await self._get_device()
+            await device.set_brightness(wanted_brightness)
+        except AttributeError as e:
+            logger.error(f"{self.host} _get_device failed: {e}")  
+        except SmartDeviceException as e:
+            logger.error(f"{self.host} unable to set_brightness: {e}")
+        except ValueError as e:
+            logger.error(f"{self.host} unable to set_brightness: {e}")
+
 
 # indexed by unique key KasaDevice.topic
 device_list: Dict[str, KasaDevice] = {}
@@ -149,10 +162,12 @@ async def MQTT_Receive_Callback(messages):
 
             # Change values based on json
             if is_json == True:
-                if json_state['state'] == "on":
+                if 'state' in json_state and json_state['state'] == "on":
                     await device_list[message.topic].turn_on()
-                if json_state['state'] == "off":
+                if 'state' in json_state and json_state['state'] == "off":
                     await device_list[message.topic].turn_off()
+                if 'brightness' in json_state:
+                    await device_list[message.topic].SetBrightness(int(json_state['brightness']))
                     
             #parse as Hex RGB
             if is_json == False and "#" in message.payload.decode(): 
