@@ -26,4 +26,11 @@ devices:
 
     porch_light:
       host: 192.168.0.137
+
+    island_right:
+      host: 192.168.0.113
+
+    island_left:
+      host: 192.168.0.196
+
 ...
