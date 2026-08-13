@@ -12,8 +12,8 @@ def _log_handler_address(files=tuple()):
     try:
         return next(f for f in files if path.exists(f))
     except StopIteration:
-        pass
-    raise Exception("Invalid files: %s" % ", ".join(files))
+        logging.warning("Invalid files: %s. using fallback log file" % ", ".join(files))
+        return None
 
 
 def initLogger(testing=False):
@@ -28,10 +28,13 @@ def initLogger(testing=False):
     logHandlerAddress = _log_handler_address(
         ["/run/systemd/journal/syslog", "/var/run/syslog", "/device/log"]
     )
-    syslog = SysLogHandler(address=logHandlerAddress, facility=SysLogHandler.LOG_DAEMON)
-    syslog.setFormatter(formatter)
-    #  logger.addHandler(syslog)
-    log_to_file()
+    if logHandlerAddress:
+        syslog = SysLogHandler(address=logHandlerAddress, facility=SysLogHandler.LOG_DAEMON)
+        syslog.setFormatter(formatter)
+        logger.addHandler(syslog)
+    else:
+        log_to_file()
+
     if testing:
         # log_to_console()
         set_log_level_debug()

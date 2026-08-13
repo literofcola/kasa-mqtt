@@ -8,40 +8,68 @@ from typing import Dict
 from dataclasses import dataclass
 from contextlib import AsyncExitStack, asynccontextmanager
 from random import randrange
-from asyncio_mqtt import Client, MqttError
+from aiomqtt import Client, MqttError
 
 from kasa_mqtt import log
 from kasa_mqtt.config import Cfg
 
-from kasa import Discover
-from kasa.smartdevice import SmartDevice, SmartDeviceException
+from kasa import Discover, Device, Module, KasaException, Credentials
+from kasa.exceptions import AuthenticationError
 
 @dataclass
 class KasaDevice:
     topic: str
     name: str
     host: str
-    _device: SmartDevice
+    username: str
+    password: str
+    _device: Device
 
-    def __init__(self, topic: str, name: str, host: str):
+    def __init__(self, topic: str, name: str, host: str, username: str = None, password: str = None):
         self.name = name
         self.topic = topic
         self.host = host
+        # Only needed for devices requiring TP-Link cloud account credentials
+        # (e.g. newer Tapo devices using the TPAP encryption scheme). Devices
+        # that don't need them can leave these as None - existing behaviour
+        # for KLAP/legacy Kasa devices is unaffected.
+        self.username = username
+        self.password = password
         self._device = None
         assert self.host
 
-    async def _get_device(self) -> SmartDevice:
+    async def _get_device(self):
         if not self._device:
             if self.host:
                 try:
-                    self._device = await Discover.discover_single(self.host)
+                    if self.username and self.password:
+                        creds = Credentials(self.username, self.password)
+                        self._device = await Discover.discover_single(self.host, credentials=creds)
+                    else:
+                        self._device = await Discover.discover_single(self.host)
+                    # update() must be called at least once so the device's
+                    # modules (e.g. Module.Light, used for HSV/brightness) get
+                    # populated - discover_single() alone does not do this.
+                    await self._device.update()
                     logger.debug(
                         f"Discovered {self.host}"
                         f" model:{self._device.model}"
                         f" mac:{self._device.mac}"
                     ) 
-                except SmartDeviceException as e:
+                except AuthenticationError as e:
+                    logger.error(f"{self.host} authentication failed - check username/password in config: {e}")
+                    self._device = None
+                except KasaException as e:
                     logger.debug(f"discover_single error: {e}")
+                    self._device = None
+                except Exception as e:
+                    # update() can raise non-KasaException errors too - e.g. a
+                    # zoneinfo.ZoneInfoNotFoundError if the device reports a
+                    # legacy timezone name (like "PST8PDT") that isn't in the
+                    # system's tzdata. Don't let that crash the whole service;
+                    # `pip install tzdata` usually fixes the root cause.
+                    logger.error(f"{self.host} update() failed: {e}")
+                    self._device = None
         return self._device
 
     async def turn_on(self):
@@ -50,7 +78,7 @@ class KasaDevice:
             await device.turn_on()
         except AttributeError as e:
             logger.error(f"{self.host} _get_device failed: {e}")       
-        except SmartDeviceException as e:
+        except KasaException as e:
             logger.error(f"{self.host} unable to turn_on: {e}")
 
     async def turn_off(self):
@@ -59,16 +87,20 @@ class KasaDevice:
             await device.turn_off()
         except AttributeError as e:
             logger.error(f"{self.host} _get_device failed: {e}")  
-        except SmartDeviceException as e:
+        except KasaException as e:
             logger.error(f"{self.host} unable to turn_off: {e}")
 
     async def SetColor_HSV(self, wanted_hsv: tuple):
         try:
             device = await self._get_device()
-            await device.set_hsv(int(wanted_hsv[0]*360), int(wanted_hsv[1]*100), int(wanted_hsv[2]*100))
+            light = device.modules.get(Module.Light)
+            if light is None:
+                logger.error(f"{self.host} does not support the Light module (no color control)")
+                return
+            await light.set_hsv(int(wanted_hsv[0]*360), int(wanted_hsv[1]*100), int(wanted_hsv[2]*100))
         except AttributeError as e:
             logger.error(f"{self.host} _get_device failed: {e}")  
-        except SmartDeviceException as e:
+        except KasaException as e:
             logger.error(f"{self.host} unable to set_hsv: {e}")
         except ValueError as e:
             logger.error(f"{self.host} unable to set_hsv: {e}")
@@ -78,10 +110,14 @@ class KasaDevice:
             return
         try:
             device = await self._get_device()
-            await device.set_brightness(wanted_brightness)
+            light = device.modules.get(Module.Light)
+            if light is None:
+                logger.error(f"{self.host} does not support the Light module (no brightness control)")
+                return
+            await light.set_brightness(wanted_brightness)
         except AttributeError as e:
             logger.error(f"{self.host} _get_device failed: {e}")  
-        except SmartDeviceException as e:
+        except KasaException as e:
             logger.error(f"{self.host} unable to set_brightness: {e}")
         except ValueError as e:
             logger.error(f"{self.host} unable to set_brightness: {e}")
@@ -107,19 +143,25 @@ async def main_loop():
         stack.push_async_callback(cancel_tasks, tasks)
 
         # Connect to the MQTT broker
-        client = Client(hostname=mqtt_broker_ip, client_id=mqtt_client_id, keepalive=0)
+        client = Client(hostname=mqtt_broker_ip, identifier=mqtt_client_id)
         await stack.enter_async_context(client)
 
-        # Messages that doesn't match a filter will get sent to MQTT_Receive_Callback
-        messages = await stack.enter_async_context(client.unfiltered_messages())
-        task = asyncio.create_task(MQTT_Receive_Callback(messages))
+        # aiomqtt no longer has filtered_messages()/unfiltered_messages() context
+        # managers - all incoming messages now come through client.messages, and
+        # we filter by topic ourselves in MQTT_Receive_Callback.
+        task = asyncio.create_task(MQTT_Receive_Callback(client))
         tasks.add(task)
 
         # Create the device list and subscribe to their topics
         for device_name, config in cfg.devices.items():
             device_topic = cfg.mqtt_topic(device_name)
             device_host = cfg.devices.get(device_name, {}).get('host')
-            device_list[device_topic] = KasaDevice(device_topic, device_name, device_host)
+            # Optional TP-Link cloud credentials, only required for devices
+            # using the newer TPAP encryption scheme (e.g. some Tapo bulbs).
+            # Leave unset in config.yaml for existing KLAP/legacy devices.
+            device_username = cfg.devices.get(device_name, {}).get('username')
+            device_password = cfg.devices.get(device_name, {}).get('password')
+            device_list[device_topic] = KasaDevice(device_topic, device_name, device_host, device_username, device_password)
             await device_list[device_topic]._get_device()
             logger.info(f"Adding {device_list[device_topic]} to device list")
             await client.subscribe(device_topic)
@@ -134,15 +176,16 @@ async def main_loop():
         # Wait for everything to complete (or fail due to, e.g., network errors)
         await asyncio.gather(*tasks)  
 
-async def MQTT_Receive_Callback(messages):
+async def MQTT_Receive_Callback(client):
     global device_list
     global running
 
-    async for message in messages:
-        logger.debug(f"{message.topic} | {message.payload.decode()}")
+    async for message in client.messages:
+        topic = message.topic.value
+        logger.debug(f"{topic} | {message.payload.decode()}")
 
         # Check if the received message topic matches one of our devices
-        if device_list.get(message.topic, None):
+        if device_list.get(topic, None):
 
             try:
                 json_state = json.loads(message.payload.decode())
@@ -155,19 +198,19 @@ async def MQTT_Receive_Callback(messages):
                 is_json = False
 
             if is_json == False and message.payload.decode() == 'on':
-                await device_list[message.topic].turn_on()
+                await device_list[topic].turn_on()
 
             if is_json == False and message.payload.decode() == 'off':
-                await device_list[message.topic].turn_off()
+                await device_list[topic].turn_off()
 
             # Change values based on json
             if is_json == True:
                 if 'state' in json_state and json_state['state'] == "on":
-                    await device_list[message.topic].turn_on()
+                    await device_list[topic].turn_on()
                 if 'state' in json_state and json_state['state'] == "off":
-                    await device_list[message.topic].turn_off()
+                    await device_list[topic].turn_off()
                 if 'brightness' in json_state:
-                    await device_list[message.topic].SetBrightness(int(json_state['brightness']))
+                    await device_list[topic].SetBrightness(int(json_state['brightness']))
                     
             #parse as Hex RGB
             if is_json == False and "#" in message.payload.decode(): 
@@ -175,14 +218,14 @@ async def MQTT_Receive_Callback(messages):
                 wanted_rgb = tuple(int(wanted_hex[i:i+2], 16) for i in (0, 2, 4))
                 wanted_rgb = tuple(x/255 for x in wanted_rgb)
                 wanted_hsv = colorsys.rgb_to_hsv(*wanted_rgb)
-                #logger.debug(f"{device_list[message.topic].name} @ {device_list[message.topic].host} SetColor_HSV {wanted_rgb}")
-                await device_list[message.topic].SetColor_HSV(wanted_hsv)
+                #logger.debug(f"{device_list[topic].name} @ {device_list[topic].host} SetColor_HSV {wanted_rgb}")
+                await device_list[topic].SetColor_HSV(wanted_hsv)
 
-        if message.topic == "kasa_mqtt_control":
+        if topic == "kasa_mqtt_control":
             if message.payload.decode() == 'shutdown':
                 running = False
                 break
-        if message.topic == "kasa_mqtt_control":
+        if topic == "kasa_mqtt_control":
             if message.payload.decode() == 'restart':
                 break
 

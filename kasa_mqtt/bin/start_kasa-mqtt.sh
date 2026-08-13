@@ -8,7 +8,7 @@ BIN_DIR="${PWD}"
 PROG_DIR="${BIN_DIR%/*}"
 TOP_DIR="${PROG_DIR%/*}"
 
-cd ${TOP_DIR}/env
+cd ${TOP_DIR}
 source ./bin/activate
 export PYTHONPATH=${PYTHONPATH:-$TOP_DIR}
 cd ${PROG_DIR} && ./main.py $@

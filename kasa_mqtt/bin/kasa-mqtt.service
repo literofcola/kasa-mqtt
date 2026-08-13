@@ -4,7 +4,7 @@ Description=MQTT front end wrapper to python-kasa
 [Service]
 User=pi
 Type=simple
-ExecStart=/home/pi/kasa-mqtt/kasa_mqtt/bin/start_kasa-mqtt.sh /home/pi/kasa-mqtt/config/config.yaml
+ExecStart=/home/pi/kasa-mqtt/kasa-mqtt/bin/start_kasa-mqtt.sh /home/pi/kasa-mqtt/config/config.yaml
 Restart=on-failure
 
 [Install]
